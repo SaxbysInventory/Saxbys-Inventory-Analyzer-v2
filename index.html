@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Saxbys Inventory Analyzer</title>
+<meta name="description" content="Saxbys Coffee – xtraCHEF Inventory Analysis Tool"/>
+
+<!-- React & Babel -->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<!-- SheetJS for Excel parsing -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Georgia, serif; background: #F5F5F5; min-height: 100vh; }
+  button { cursor: pointer; font-family: inherit; }
+  input { font-family: inherit; outline: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  input[type=range] { accent-color: #1E5631; width: 100%; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+
+const C = {
+  grn:"#1E5631",grn2:"#163D22",grn3:"#0F2714",gold:"#C8A84B",
+  red:"#C0392B",amb:"#E67E22",pur:"#7D3C98",blu:"#1A5276",
+  lred:"#FDEDEC",lamb:"#FEF9EC",lgrn:"#EAF4EC",lpur:"#F5EEF8",lblu:"#EBF5FB",
+  lgr:"#F5F5F5",mgr:"#CCCCCC",dgr:"#444444",wht:"#FFFFFF",
+};
+
+function useXLSX(){
+  const[ready,setReady]=useState(false);
+  useEffect(()=>{
+    if(window.XLSX){setReady(true);return;}
+    const s=document.createElement("script");
+    s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload=()=>setReady(true);document.head.appendChild(s);
+  },[]);
+  return ready;
+}
+
+function downloadReport(report,fileName,allRecount,high,waste,zero,totalWasteCost,parsed){
+  const loc=report.location||"Saxbys";
+  const fmt=n=>n==null?"—":Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
+  const usd=n=>(!n&&n!==0)?"—":"$"+Number(n).toFixed(2);
+  const badge=(cost)=>{
+    const n=parseFloat(cost)||0;
+    if(n>=100) return '<span style="background:#C0392B;color:#fff;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;white-space:nowrap">🚨 CRITICAL</span>';
+    if(n>=30)  return '<span style="background:#E74C3C;color:#fff;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;white-space:nowrap">📢 ATTENTION</span>';
+    return        '<span style="background:#E67E22;color:#fff;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;white-space:nowrap">⚠️ DOUBLE CHECK</span>';
+  };
+  const th=h=>'<th style="padding:7px 10px;background:#eaeaea;color:#444;font-weight:700;text-align:right;border-bottom:1px solid #ccc;font-size:11px;white-space:nowrap">'+h+'</th>';
+  const thL=h=>'<th style="padding:7px 10px;background:#eaeaea;color:#444;font-weight:700;text-align:left;border-bottom:1px solid #ccc;font-size:11px;white-space:nowrap">'+h+'</th>';
+  const td=(v,extra="")=>'<td style="padding:7px 10px;border-bottom:1px solid #ddd;text-align:right;font-family:sans-serif;vertical-align:top'+extra+'">'+v+'</td>';
+  const tdL=(v,extra="")=>'<td style="padding:7px 10px;border-bottom:1px solid #ddd;text-align:left;font-family:sans-serif;vertical-align:top'+extra+'">'+v+'</td>';
+  const section=(title,color,count,tableHTML)=>
+    '<div style="margin-bottom:24px">'+
+    '<div style="background:'+color+';border-radius:10px 10px 0 0;padding:10px 16px;display:flex;justify-content:space-between;align-items:center">'+
+    '<span style="color:#fff;font-weight:700;font-size:13px">'+title+'</span>'+
+    '<span style="background:rgba(255,255,255,.22);color:#fff;border-radius:20px;padding:2px 12px;font-size:12px;font-weight:700">'+count+'</span>'+
+    '</div>'+
+    '<div style="border:1px solid #ccc;border-top:none;border-radius:0 0 10px 10px;overflow:hidden">'+
+    '<table style="width:100%;border-collapse:collapse;font-size:12px">'+tableHTML+'</table></div></div>';
+
+  // Section 1
+  const s1rows=allRecount.map((r,i)=>{
+    const bg=i%2===0?"#fdedec":"#fff";
+    return '<tr style="background:'+bg+'">'+
+      tdL('<b>'+(r.item||"")+(r.unit?' <span style="color:#888;font-weight:400;font-size:11px">('+r.unit+')</span>':'')+' </b>')+
+      tdL(badge(r.actualCost))+
+      td(r.opening!=null?'<b>'+fmt(r.opening)+'</b>':"—")+
+      td(r.purchased!=null?'<b>'+fmt(r.purchased)+'</b>':"—")+
+      td(r.closing!=null?'<b>'+fmt(r.closing)+'</b>':"—")+
+      td(r.actual!=null?'<b style="color:#C0392B">'+fmt(r.actual)+'</b>':"—")+
+      td(r.actualCost!=null?'<b style="color:#C0392B">'+usd(r.actualCost)+'</b>':"—")+
+    '</tr>';
+  }).join("");
+  const s1=allRecount.length?section("SECTION 1 — IMMEDIATE ATTENTION","#C0392B",allRecount.length,
+    '<thead><tr>'+thL("Item")+thL("Recount / Check Invoice")+th("Opening")+th("Purchase")+th("Closing")+th("Actual")+th("Actual $")+'</tr></thead><tbody>'+s1rows+'</tbody>'):"";
+
+  // Section 2
+  const s2rows=[...high].sort((a,b)=>(b.actualCost||0)-(a.actualCost||0)).map((h,i)=>
+    '<tr style="background:'+(i%2===0?"#eaf4ec":"#fff")+'">'+
+    tdL('<b>'+h.item+(h.unit?' <span style="color:#888;font-weight:400;font-size:11px">('+h.unit+')</span>':'')+' </b>')+
+    td(fmt(h.actualQty))+
+    td('<b style="color:#1E5631">'+usd(h.actualCost)+'</b>')+
+    tdL('<span style="font-size:11px;color:#888">'+h.note+'</span>')+
+    '</tr>').join("");
+  const s2=high.length?section("SECTION 2 — HIGH ACTUAL CONSUMPTION","#1E5631",high.length,
+    '<thead><tr>'+thL("Item")+th("Actual Qty")+th("Actual Cost")+thL("Note")+'</tr></thead><tbody>'+s2rows+'</tbody>'):"";
+
+  // Section 3
+  const s3rows=[...waste].sort((a,b)=>(b.wasteCost||0)-(a.wasteCost||0)).map((w,i)=>
+    '<tr style="background:'+(i%2===0?"#f5eef8":"#fff")+'">'+
+    tdL('<b>'+w.item+(w.unit?' <span style="color:#888;font-weight:400;font-size:11px">('+w.unit+')</span>':'')+' </b>')+
+    td(fmt(w.wasteQty))+
+    td('<b style="color:#7D3C98">'+usd(w.wasteCost)+'</b>')+
+    tdL('<span style="font-size:11px;color:#888">'+w.note+'</span>')+
+    '</tr>').join("");
+  const s3=waste.length?section("SECTION 3 — WASTE SUMMARY  |  Total: "+usd(totalWasteCost),"#7D3C98",waste.length,
+    '<thead><tr>'+thL("Item")+th("Waste Qty")+th("Waste Cost")+thL("Note")+'</tr></thead><tbody>'+s3rows+'</tbody>'):"";
+
+  // Section 4
+  const s4rows=zero.map((z,i)=>
+    '<tr style="background:'+(i%2===0?"#ebf5fb":"#fff")+'">'+
+    tdL('<b>'+z.item+(z.unit?' <span style="color:#888;font-weight:400;font-size:11px">('+z.unit+')</span>':'')+' </b>')+
+    td('<b>'+fmt(z.onHand)+'</b>')+
+    tdL('<span style="font-size:11px;color:#888">'+z.note+'</span>')+
+    '</tr>').join("");
+  const s4=zero.length?section("SECTION 4 — ZERO MOVEMENT","#1A5276",zero.length,
+    '<thead><tr>'+thL("Item")+th("On Hand")+thL("Observation")+'</tr></thead><tbody>'+s4rows+'</tbody>'):"";
+
+  const html='<!DOCTYPE html><html><head><meta charset="UTF-8">'+
+    '<title>Saxbys Inventory Analysis — '+loc+'</title>'+
+    '<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Georgia,serif;background:#f5f5f5;padding:20px}'+
+    '@media print{body{background:#fff;padding:0}@page{margin:1.2cm}}</style></head><body>'+
+    '<div style="max-width:960px;margin:0 auto">'+
+    // Header
+    '<div style="background:#1E5631;border-radius:12px;padding:20px 24px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center">'+
+    '<div><div style="color:#fff;font-weight:700;font-size:18px">'+loc+' — Inventory Analysis</div>'+
+    '<div style="color:#C8A84B;font-size:12px;margin-top:4px;font-family:sans-serif">'+
+    (parsed.opening?parsed.opening+' &nbsp;·&nbsp; '+parsed.closing:fileName)+'</div></div>'+
+    '<div style="color:rgba(255,255,255,.5);font-size:11px;font-family:sans-serif;text-align:right">Generated<br>'+new Date().toLocaleString()+'</div></div>'+
+    // Summary
+    '<div style="background:#fff;border-radius:12px;padding:18px 22px;margin-bottom:16px;border-left:5px solid #1E5631;box-shadow:0 1px 6px rgba(0,0,0,.07)">'+
+    '<div style="font-weight:700;font-size:15px;color:#1E5631;margin-bottom:6px">Executive Summary</div>'+
+    '<div style="color:#444;font-size:14px;line-height:1.7;font-family:sans-serif">'+report.summary+'</div></div>'+
+    // Stats
+    '<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap">'+
+    [["Immediate Attention",allRecount.length,"#C0392B","#FDEDEC"],
+     ["High Consumption Alerts",high.length,"#1E5631","#EAF4EC"],
+     ["Waste Events",waste.length,"#7D3C98","#F5EEF8"],
+     ["Zero-Movement Items",zero.length,"#1A5276","#EBF5FB"]
+    ].map(([l,n,c,bg])=>'<div style="flex:1 1 120px;background:'+bg+';border:2px solid '+c+';border-radius:12px;padding:13px 8px;text-align:center">'+
+      '<div style="font-size:24px;font-weight:900;color:'+c+'">'+n+'</div>'+
+      '<div style="font-size:11px;color:#444;margin-top:4px;font-family:sans-serif">'+l+'</div></div>').join("")+
+    '</div>'+
+    s1+s2+s3+s4+
+    '<div style="text-align:center;color:#bbb;font-size:11px;padding-top:14px;border-top:1px solid #ccc;padding-bottom:20px;font-family:sans-serif">'+
+    'Saxbys Inventory Analysis · '+loc+' · '+fileName+' · '+new Date().toLocaleString()+'</div>'+
+    '</div>'+
+    '<script>window.onload=function(){setTimeout(function(){window.print();},800);}<\/script>'+
+    '</body></html>';
+
+  const blob=new Blob([html],{type:"text/html"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download="Saxbys_Inventory_"+loc.replace(/[^a-zA-Z0-9]/g,"_")+"_"+new Date().toISOString().slice(0,10)+".html";
+  document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},200);
+}
+
+function parseXtraCHEF(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      try{
+        const wb=window.XLSX.read(new Uint8Array(e.target.result),{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const rows=window.XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+        const hi=rows.findIndex(r=>r.some(c=>String(c).trim()==="Product"));
+        if(hi<0) throw new Error("No 'Product' column found. Make sure this is the xtraCHEF Actual vs. Theoretical export.");
+        const headers=rows[hi].map(h=>String(h||"").trim());
+        const data=rows.slice(hi+1).filter(r=>String(r[0]||"").trim())
+          .map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]??""])));
+        resolve(data);
+      }catch(err){reject(err);}
+    };
+    reader.onerror=()=>reject(new Error("Failed to read file."));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function extractJSON(text){
+  let s=text.replace(/^```json\s*/m,"").replace(/^```\s*/m,"").replace(/\s*```\s*$/m,"").trim();
+  try{return JSON.parse(s);}catch(_){}
+  const a=s.indexOf("{"),b=s.lastIndexOf("}");
+  if(a>=0&&b>a){try{return JSON.parse(s.slice(a,b+1));}catch(_){}}
+  if(a>=0){
+    let f=s.slice(a);
+    const ob=(f.match(/\[/g)||[]).length-(f.match(/\]/g)||[]).length;
+    const oc=(f.match(/\{/g)||[]).length-(f.match(/\}/g)||[]).length;
+    f=f.replace(/,\s*$/,"").replace(/,\s*\{[^}]*$/,"");
+    for(let i=0;i<Math.max(ob,0);i++)f+="]";
+    for(let i=0;i<Math.max(oc-1,0);i++)f+="}";
+    f+="}";
+    try{return JSON.parse(f);}catch(_){}
+  }
+  throw new Error("Could not parse the AI response. Try a shorter date range.");
+}
+
+async function callClaude(rawData,location,apiKey){
+  const items=rawData.map(r=>({
+    p:String(r["Product"]||"").trim(),u:String(r["Product Unit"]||"").trim(),
+    o:parseFloat(r["Opening Inventory (Qty)"])||0,b:parseFloat(r["Purchase (Qty)"])||0,
+    w:parseFloat(r["Waste (Qty)"])||0,c:parseFloat(r["Closing Inventory (Qty)"])||0,
+    aq:parseFloat(r["Actual Consumption (Qty)"])||0,ac:parseFloat(r["Actual Consumption (Cost)"])||0,
+  })).filter(i=>i.p);
+
+  const sys="You are an inventory analyst for Saxbys Coffee at "+(location||"this location")+". "
+    +"Base ALL analysis on actual consumption math only. Never mention theoretical consumption. "
+    +"Keep all text fields under 100 characters. Limits: flags<=10, negConsumption<=20, highConsumption<=12, waste<=15, zeroMovement<=15.";
+
+  const schema='{"location":"'+(location||"this location")+'","summary":"2 sentences.","totalItems":'+items.length+',"totalWasteCost":0,'
+    +'"dataIntegrityFlags":[{"item":"","severity":"red","unit":"","issue":"","action":"","opening":null,"purchased":null,"closing":null,"actual":null,"actualCost":null}],'
+    +'"negativeConsumption":[{"item":"","unit":"","opening":0,"purchased":0,"waste":0,"closing":0,"actual":0,"actualCost":0,"note":""}],'
+    +'"highConsumption":[{"item":"","unit":"","actualQty":0,"actualCost":0,"note":""}],'
+    +'"wasteEvents":[{"item":"","unit":"","wasteQty":0,"wasteCost":0,"note":""}],'
+    +'"zeroMovement":[{"item":"","unit":"","onHand":0,"note":""}]}';
+
+  const userMsg="Data ("+items.length+" items). Keys: p=product,u=unit,o=opening,b=purchased,w=waste,c=closing,aq=actual qty,ac=actual cost.\n"
+    +JSON.stringify(items)+"\n\nReturn ONLY valid JSON:\n"+schema+"\n\n"
+    +"STRICT ARRAY RULES — follow exactly:\n"
+    +"negativeConsumption: ANY item where aq<0 OR closing>(opening+b-w). Include ALL such items here with their exact numbers. DO NOT put these in dataIntegrityFlags.\n"
+    +"dataIntegrityFlags: ONLY for: (a) impossibly large opening counts (UOM error, e.g. 34000 units), (b) stock appearing at closing with 0 opening AND 0 purchased AND 0 waste, (c) waste logged against zero opening stock. These are structural data errors, not math errors.\n"
+    +"highConsumption: top 12 by actual cost with brief note.\n"
+    +"zeroMovement: opening>50 and aq=0 all period.\n"
+    +"wasteEvents: all w>0 sorted by waste cost desc.\n"
+    +"For negativeConsumption, populate opening/purchased/waste/closing/actual with the EXACT numbers from the data.\n"
+    +"For dataIntegrityFlags, populate unit, opening/purchased/closing/actual with exact numbers when available, "+"and actualCost = abs(actual) * unitPrice (the dollar value of the discrepancy).\n"
+    +"For negativeConsumption, populate all number fields including actualCost = abs(actual) * unitPrice.\n"
+    +"Sort both arrays by actualCost descending (largest dollar impact first).";
+
+  const res=await fetch("https://saxbys-inventory-proxy.gabrieldearaujo.workers.dev",{
+    method:"POST",
+    headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01","x-api-key":apiKey||""},
+    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:16000,system:sys,messages:[{role:"user",content:userMsg}]}),
+  });
+  if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error("Claude API "+res.status+": "+(e?.error?.message||res.statusText));}
+  const json=await res.json();
+  const block=(json.content||[]).find(b=>b.type==="text");
+  return extractJSON(block?block.text:"");
+}
+
+const fmt=n=>n==null?"—":Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
+const usd=n=>(!n&&n!==0)?"—":"$"+Number(n).toFixed(2);
+
+// Parse xtraCHEF filename into "Opening: Month DD, YYYY | Closing: Month DD, YYYY"
+function parseFileName(name){
+  // Matches: ..._MM_DD_YYYY_to_MM_DD_YYYY...
+  const m=name.match(/(\d{2})_(\d{2})_(\d{4})_to_(\d{2})_(\d{2})_(\d{4})/);
+  if(!m) return {label:name,opening:"",closing:""};
+  const months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const fmt=(mo,dd,yy)=>months[parseInt(mo,10)-1]+" "+parseInt(dd,10)+", "+yy;
+  return{
+    label:"",
+    opening:"Opening Inventory: "+fmt(m[1],m[2],m[3]),
+    closing:"Closing Inventory: "+fmt(m[4],m[5],m[6]),
+  };
+}
+
+const Spinner=({size=40,color="#1E5631"})=>(
+  <div style={{width:size,height:size,border:"3px solid #e0e0e0",borderTop:"3px solid "+color,borderRadius:"50%",animation:"spin .9s linear infinite"}}/>
+);
+const Banner=({title,color,count})=>(
+  <div style={{background:color,borderRadius:"10px 10px 0 0",padding:"10px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+    <span style={{color:"#FFFFFF",fontWeight:700,fontSize:13,letterSpacing:".02em"}}>{title}</span>
+    {count!=null&&<span style={{background:"rgba(255,255,255,.22)",color:"#FFFFFF",borderRadius:20,padding:"2px 12px",fontSize:12,fontWeight:700}}>{count}</span>}
+  </div>
+);
+const TW=({children})=>(
+  <div style={{border:"1px solid #CCCCCC",borderTop:"none",borderRadius:"0 0 10px 10px",overflow:"hidden",marginBottom:24}}>
+    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>{children}</table>
+  </div>
+);
+const TH=({ch,align="left"})=><th style={{padding:"7px 10px",background:"#eaeaea",color:"#444444",fontWeight:700,textAlign:align,borderBottom:"1px solid #CCCCCC",fontSize:11,fontFamily:"sans-serif",whiteSpace:"nowrap"}}>{ch}</th>;
+const TD=({ch,align="left",color="#444444"})=><td style={{padding:"7px 10px",borderBottom:"1px solid #CCCCCC",color,textAlign:align,fontFamily:"sans-serif",verticalAlign:"top"}}>{ch}</td>;
+const Stat=({n,label,color,bg})=>(
+  <div style={{flex:"1 1 110px",background:bg,border:"2px solid "+color,borderRadius:12,padding:"13px 8px",textAlign:"center"}}>
+    <div style={{fontSize:26,fontWeight:900,color,lineHeight:1}}>{n}</div>
+    <div style={{fontSize:11,color:"#444444",marginTop:4,fontFamily:"sans-serif",lineHeight:1.3}}>{label}</div>
+  </div>
+);
+
+function DropZone({file,onFile}){
+  const ref=useRef();
+  const[over,setOver]=useState(false);
+  return(
+    <div
+      onDragOver={e=>{e.preventDefault();setOver(true);}}
+      onDragLeave={()=>setOver(false)}
+      onDrop={e=>{e.preventDefault();setOver(false);if(e.dataTransfer.files[0])onFile(e.dataTransfer.files[0]);}}
+      onClick={()=>ref.current?.click()}
+      style={{border:"2px dashed "+(over||file?"#1E5631":"#CCCCCC"),borderRadius:14,padding:"28px 20px",textAlign:"center",cursor:"pointer",background:over||file?"#EAF4EC":"#FFFFFF",transition:"all .2s",marginBottom:18}}
+    >
+      {file
+        ?<><div style={{fontSize:28,marginBottom:6}}>✅</div><div style={{fontWeight:700,color:"#1E5631",fontSize:14}}>{file.name}</div><div style={{color:"#999",fontSize:12,marginTop:2}}>Click to replace</div></>
+        :<><div style={{fontSize:32,marginBottom:6}}>📊</div><div style={{fontWeight:700,color:"#444444",fontSize:14,marginBottom:2}}>Drop Actual vs. Theoretical .xlsx here</div><div style={{color:"#aaa",fontSize:12}}>Drag &amp; drop or click to browse</div></>
+      }
+      <input ref={ref} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={e=>{if(e.target.files[0])onFile(e.target.files[0]);e.target.value="";}}/>
+    </div>
+  );
+}
+
+function UploadScreen({xlsxReady,onAnalyze}){
+  const[file,setFile]=useState(null);
+  const[loc,setLoc]=useState("Wellesley");
+  const[openDate,setOpenDate]=useState("");
+  const[closeDate,setCloseDate]=useState("");
+  const[apiKey,setApiKey]=useState(()=>localStorage.getItem("sxb_key")||"");
+  const[err,setErr]=useState("");
+  const go=()=>{
+    if(!apiKey||!apiKey.startsWith("sk-ant-")){setErr("Please enter your Anthropic API key (starts with sk-ant-).");return;}
+    if(!file){setErr("Please upload the xtraCHEF report.");return;}
+    localStorage.setItem("sxb_key",apiKey);
+    setErr("");onAnalyze({file,location:loc,openDate,closeDate,apiKey});
+  };
+  return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#0F2714 0%,#163D22 45%,#1a2e1d 100%)",display:"flex",flexDirection:"column",fontFamily:"Georgia,serif"}}>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}*{box-sizing:border-box}`}</style>
+      <div style={{padding:"26px 36px",display:"flex",alignItems:"center",gap:14}}>
+        <div style={{width:44,height:44,background:"#C8A84B",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,color:"#1E5631",fontSize:22}}>S</div>
+        <div>
+          <div style={{color:"#FFFFFF",fontWeight:700,fontSize:20,letterSpacing:"-.02em"}}>Inventory Analyzer</div>
+          <div style={{color:"#C8A84B",fontSize:11,fontFamily:"sans-serif",letterSpacing:".08em",textTransform:"uppercase"}}>xtraCHEF · Weekly Analysis</div>
+        </div>
+      </div>
+      <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:"16px 20px"}}>
+        <div style={{background:"#FFFFFF",borderRadius:20,padding:"34px 38px",width:"100%",maxWidth:520,boxShadow:"0 24px 80px rgba(0,0,0,.3)"}}>
+          <div style={{fontSize:22,fontWeight:700,color:"#1E5631",marginBottom:8}}>Weekly Inventory Analysis</div>
+          <div style={{color:"#777",fontSize:13,fontFamily:"sans-serif",lineHeight:1.6,marginBottom:22}}>
+            Upload the <b>Actual vs. Theoretical</b> export from xtraCHEF. Claude will flag items to recount, analyze consumption, and surface waste.
+          </div>
+          <div style={{marginBottom:16}}>
+            <label style={{fontWeight:700,fontSize:13,color:"#444444",display:"block",marginBottom:6,fontFamily:"sans-serif"}}>Location</label>
+            <input value={loc} onChange={e=>setLoc(e.target.value)} placeholder="e.g. Wellesley"
+              style={{width:"100%",padding:"11px 14px",borderRadius:10,border:"1.5px solid #CCCCCC",fontSize:14,fontFamily:"sans-serif",color:"#444444",outline:"none"}}
+              onFocus={e=>e.target.style.borderColor="#1E5631"} onBlur={e=>e.target.style.borderColor="#CCCCCC"}/>
+          </div>
+
+          <div style={{marginBottom:16}}>
+            <label style={{fontWeight:700,fontSize:13,color:"#444444",display:"block",marginBottom:6,fontFamily:"sans-serif"}}>Anthropic API Key</label>
+            <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="sk-ant-..."
+              style={{width:"100%",padding:"11px 14px",borderRadius:10,border:"1.5px solid #CCCCCC",fontSize:13,fontFamily:"monospace",color:"#444444",outline:"none"}}
+              onFocus={e=>e.target.style.borderColor="#1E5631"} onBlur={e=>e.target.style.borderColor="#CCCCCC"}/>
+            <div style={{fontSize:11,color:"#999",marginTop:4,fontFamily:"sans-serif"}}>
+              Get yours at <b>console.anthropic.com</b> · Saved in your browser after first use
+            </div>
+          </div>
+          <DropZone file={file} onFile={setFile}/>
+          {err&&<div style={{background:"#FDEDEC",border:"1px solid #C0392B",borderRadius:8,padding:"10px 14px",marginBottom:14,color:"#C0392B",fontSize:13,fontFamily:"sans-serif"}}>{err}</div>}
+          <button onClick={go} disabled={!xlsxReady}
+            style={{width:"100%",padding:15,borderRadius:12,border:"none",background:xlsxReady?"#1E5631":"#CCCCCC",color:"#FFFFFF",fontSize:15,fontWeight:700,cursor:xlsxReady?"pointer":"not-allowed",fontFamily:"Georgia,serif",transition:"all .2s"}}>
+            {xlsxReady?"Run Analysis →":"Loading…"}
+          </button>
+        </div>
+      </div>
+      <div style={{padding:14,textAlign:"center",color:"rgba(255,255,255,.3)",fontSize:11,fontFamily:"sans-serif"}}>CONFIDENTIAL · Internal Use Only</div>
+    </div>
+  );
+}
+
+function ProcessingScreen({step}){
+  const steps=["Reading file…","Running AI analysis…","Building report…"];
+  const idx=Math.max(0,steps.indexOf(step));
+  return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#0F2714 0%,#163D22 45%,#1a2e1d 100%)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{textAlign:"center",padding:40}}>
+        <Spinner size={48} color="#C8A84B"/>
+        <div style={{color:"#FFFFFF",fontWeight:700,fontSize:20,marginTop:22,fontFamily:"Georgia,serif"}}>Analyzing Inventory</div>
+        <div style={{color:"#C8A84B",fontSize:13,marginTop:8,marginBottom:28,fontFamily:"sans-serif"}}>{step}</div>
+        <div style={{background:"rgba(255,255,255,.08)",borderRadius:12,padding:"18px 26px",display:"flex",flexDirection:"column",gap:10,alignItems:"flex-start"}}>
+          {steps.map((s,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:10,color:i<idx?"#C8A84B":i===idx?"#FFFFFF":"rgba(255,255,255,.35)",fontSize:13,fontFamily:"sans-serif"}}>
+              <span style={{width:18}}>{i<idx?"✅":i===idx?"⏳":"○"}</span>{s}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResultsScreen({report,fileName,onReset}){
+  const parsed=parseFileName(fileName);
+  const flags=report.dataIntegrityFlags||[];
+  const neg=report.negativeConsumption||[];
+  const high=report.highConsumption||[];
+  const waste=report.wasteEvents||[];
+  const zero=report.zeroMovement||[];
+  const totalWasteCost=waste.reduce((sum,w)=>sum+(parseFloat(w.wasteCost)||0),0);
+
+  // Deduplicate: if same item appears in both flags and neg, keep neg (has numbers)
+  const negNames=new Set(neg.map(n=>(n.item||"").toLowerCase().trim()));
+  const allRecount=[
+    ...flags.filter(f=>!negNames.has((f.item||"").toLowerCase().trim())).map(f=>({...f,_type:"flag"})),
+    ...neg.map(n=>({...n,_type:"neg"})),
+  ].sort((a,b)=>(b.actualCost||0)-(a.actualCost||0));
+
+  const sendEmail=()=>{
+    const loc=report.location||"this location";
+    const date=new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"});
+    const lines=[];
+    lines.push("SAXBYS INVENTORY ANALYSIS — "+loc.toUpperCase());
+    const fmtD=s=>{if(!s)return null;const d=new Date(s+"T12:00:00");return d.toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"});};
+    const od=fmtD(report._openDate),cd=fmtD(report._closeDate);
+    const dateLabel=od&&cd?"Opening: "+od+"  |  Closing: "+cd:od?"Opening: "+od:cd?"Closing: "+cd:"File: "+fileName;
+    lines.push(dateLabel);
+    lines.push("=".repeat(60));
+    lines.push("");
+    lines.push("EXECUTIVE SUMMARY");
+    lines.push(report.summary||"");
+    lines.push("");
+    lines.push("OVERVIEW");
+    lines.push("• Recount / Double Check Items: "+allRecount.length);
+    lines.push("• High Consumption Alerts:      "+high.length);
+    lines.push("• Waste Events:                 "+waste.length+" (Total: "+usd(totalWasteCost)+")");
+    lines.push("• Zero-Movement Items:          "+zero.length);
+    lines.push("");
+    if(allRecount.length>0){
+      lines.push("SECTION 1 — IMMEDIATE ATTENTION");
+      lines.push("-".repeat(40));
+      allRecount.forEach(r=>{
+        const cost=r.actualCost!=null?usd(r.actualCost):"—";
+        const label=parseFloat(r.actualCost||0)>=100?"🚨 CRITICAL":parseFloat(r.actualCost||0)>=30?"📢 ATTENTION":"⚠️ DOUBLE CHECK";
+        lines.push(label+" | "+r.item+(r.unit?" ("+r.unit+")":"")+" | Actual $: "+cost);
+        if(r.opening!=null) lines.push("  Open: "+fmt(r.opening)+" | Purchase: "+fmt(r.purchased)+" | Close: "+fmt(r.closing)+" | Actual: "+fmt(r.actual));
+      });
+      lines.push("");
+    }
+    if(high.length>0){
+      lines.push("SECTION 2 — HIGH ACTUAL CONSUMPTION");
+      lines.push("-".repeat(40));
+      [...high].sort((a,b)=>(b.actualCost||0)-(a.actualCost||0)).forEach(h=>{
+        lines.push("• "+h.item+(h.unit?" ("+h.unit+")":"")+" — Qty: "+fmt(h.actualQty)+" | Cost: "+usd(h.actualCost));
+        if(h.note) lines.push("  Note: "+h.note);
+      });
+      lines.push("");
+    }
+    if(waste.length>0){
+      lines.push("SECTION 3 — WASTE SUMMARY (Total: "+usd(totalWasteCost)+")");
+      lines.push("-".repeat(40));
+      [...waste].sort((a,b)=>(b.wasteCost||0)-(a.wasteCost||0)).forEach(w=>{
+        lines.push("• "+w.item+(w.unit?" ("+w.unit+")":"")+" — Qty: "+fmt(w.wasteQty)+" | Cost: "+usd(w.wasteCost));
+      });
+      lines.push("");
+    }
+    lines.push("=".repeat(60));
+    lines.push("Saxbys Inventory Analysis · "+loc+" · Generated "+date);
+
+    const fmtDS=s=>{if(!s)return null;const d=new Date(s+"T12:00:00");return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});};const subjectDate=fmtDS(report._openDate)&&fmtDS(report._closeDate)?fmtDS(report._openDate)+" to "+fmtDS(report._closeDate):date;const subject="Saxbys Inventory Analysis — "+loc+" — "+subjectDate;
+    const body=lines.join("\n");
+    const a=document.createElement("a");a.href="mailto:?subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);a.target="_blank";document.body.appendChild(a);a.click();document.body.removeChild(a);
+  };
+
+  const Badge=({cost})=>{
+    const n=parseFloat(cost)||0;
+    if(n>=100) return <span style={{background:"#C0392B",color:"#FFFFFF",borderRadius:5,padding:"3px 10px",fontSize:10,fontWeight:700,fontFamily:"sans-serif",whiteSpace:"nowrap"}}>🚨 CRITICAL</span>;
+    if(n>=30)  return <span style={{background:"#E74C3C",color:"#FFFFFF",borderRadius:5,padding:"3px 10px",fontSize:10,fontWeight:700,fontFamily:"sans-serif",whiteSpace:"nowrap"}}>📢 ATTENTION</span>;
+    return       <span style={{background:"#E67E22",color:"#FFFFFF",borderRadius:5,padding:"3px 10px",fontSize:10,fontWeight:700,fontFamily:"sans-serif",whiteSpace:"nowrap"}}>⚠️ DOUBLE CHECK</span>;
+  };
+
+  return(
+    <div style={{minHeight:"100vh",background:"#F5F5F5",fontFamily:"Georgia,serif"}}>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}*{box-sizing:border-box}@media print{.np{display:none!important}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}@page{margin:1.4cm}}`}</style>
+
+      <div className="np" style={{background:"#1E5631",padding:"13px 28px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 8px rgba(0,0,0,.15)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:34,height:34,background:"#C8A84B",borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,color:"#1E5631",fontSize:17}}>S</div>
+          <div>
+            <div style={{color:"#FFFFFF",fontWeight:700,fontSize:15,fontFamily:"Georgia,serif"}}>{report.location} — Inventory Analysis</div>
+            <div style={{color:"rgba(255,255,255,.6)",fontSize:11,fontFamily:"sans-serif"}}>
+              {parsed.opening
+                ? <>{parsed.opening}&nbsp;&nbsp;·&nbsp;&nbsp;{parsed.closing}</>
+                : fileName}
+            </div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={onReset} style={{padding:"7px 16px",borderRadius:7,border:"1.5px solid #C8A84B",background:"transparent",color:"#C8A84B",fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"sans-serif"}}>← New Report</button>
+          <button onClick={()=>downloadReport(report,fileName,allRecount,high,waste,zero,totalWasteCost,parsed)}
+           style={{padding:"7px 20px",borderRadius:7,border:"none",background:"#C8A84B",color:"#1E5631",fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"sans-serif"}}>⬇️ Download Report (open in browser → Print → Save as PDF)</button>
+          <button onClick={sendEmail} style={{padding:"7px 20px",borderRadius:7,border:"1.5px solid #C8A84B",background:"transparent",color:"#C8A84B",fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"sans-serif"}}>✉️ Send to Email</button>
+        </div>
+      </div>
+
+      <div style={{padding:"24px 20px",background:"#F5F5F5"}}>
+        <div style={{maxWidth:960,margin:"0 auto"}}>
+
+          <div style={{background:"#FFFFFF",borderRadius:12,padding:"18px 22px",marginBottom:18,boxShadow:"0 1px 6px rgba(0,0,0,.07)",borderLeft:"5px solid #1E5631"}}>
+            <div style={{fontWeight:700,fontSize:15,color:"#1E5631",marginBottom:6}}>Executive Summary</div>
+            <div style={{color:"#444444",fontSize:14,lineHeight:1.7,fontFamily:"sans-serif"}}>{report.summary}</div>
+          </div>
+
+          <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
+            <Stat n={allRecount.length} label="Immediate Attention" color="#C0392B" bg="#FDEDEC"/>
+            <Stat n={high.length}       label="High Consumption Alerts" color="#1E5631" bg="#EAF4EC"/>
+            <Stat n={waste.length}      label="Waste Events"            color="#7D3C98" bg="#F5EEF8"/>
+            <Stat n={zero.length}       label="Zero-Movement Items"     color="#1A5276" bg="#EBF5FB"/>
+          </div>
+
+          {allRecount.length>0&&(
+            <>
+              <Banner title="SECTION 1 — IMMEDIATE ATTENTION" color="#C0392B" count={allRecount.length}/>
+              <TW>
+                <thead>
+                  <tr>
+                    <TH ch="Item"/>
+                    <TH ch="Recount / Check Invoice"/>
+                    <TH ch="Opening" align="right"/>
+                    <TH ch="Purchase" align="right"/>
+                    <TH ch="Closing" align="right"/>
+                    <TH ch="Actual" align="right"/>
+                    <TH ch="Actual $" align="right"/>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allRecount.map((row,i)=>{
+                    const bg=i%2===0?"#FDEDEC":"#FFFFFF";
+                    if(row._type==="flag"){
+                      return(
+                        <tr key={"f"+i} style={{background:bg}}>
+                          <TD ch={<b>{row.item}{row.unit?<span style={{color:"#888",fontWeight:400,fontSize:11}}> ({row.unit})</span>:null}</b>}/>
+                          <TD ch={<Badge cost={row.actualCost}/>}/>
+                          <TD ch={row.opening!=null?<b>{fmt(row.opening)}</b>:"—"} align="right"/>
+                          <TD ch={row.purchased!=null?<b>{fmt(row.purchased)}</b>:"—"} align="right"/>
+                          <TD ch={row.closing!=null?<b>{fmt(row.closing)}</b>:"—"} align="right"/>
+                          <TD ch={row.actual!=null?<b style={{color:"#C0392B"}}>{fmt(row.actual)}</b>:"—"} align="right"/>
+                          <TD ch={row.actualCost!=null?<b style={{color:"#C0392B"}}>{usd(row.actualCost)}</b>:"—"} align="right"/>
+                        </tr>
+                      );
+                    }
+                    return(
+                      <tr key={"n"+i} style={{background:bg}}>
+                        <TD ch={<b>{row.item}{row.unit?<span style={{color:"#888",fontWeight:400,fontSize:11}}> ({row.unit})</span>:null}</b>}/>
+                        <TD ch={<Badge cost={row.actualCost}/>}/>
+                        <TD ch={<b>{fmt(row.opening)}</b>} align="right"/>
+                        <TD ch={<b>{fmt(row.purchased)}</b>} align="right"/>
+                        <TD ch={<b>{fmt(row.closing)}</b>} align="right"/>
+                        <TD ch={<b style={{color:"#C0392B"}}>{fmt(row.actual)}</b>} align="right"/>
+                        <TD ch={<b style={{color:"#C0392B"}}>{usd(row.actualCost)}</b>} align="right"/>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </TW>
+            </>
+          )}
+
+          {high.length>0&&(
+            <>
+              <Banner title="SECTION 2 — HIGH ACTUAL CONSUMPTION  |  Top Items This Week by Cost" color="#1E5631" count={high.length}/>
+              <TW>
+                <thead><tr><TH ch="Item"/><TH ch="Unit"/><TH ch="Actual Qty" align="right"/><TH ch="Actual Cost" align="right"/><TH ch="Note"/></tr></thead>
+                <tbody>{[...high].sort((a,b)=>(b.actualCost||0)-(a.actualCost||0)).map((h,i)=>(
+                  <tr key={i} style={{background:i%2===0?"#EAF4EC":"#FFFFFF"}}>
+                    <TD ch={<b>{h.item}</b>}/><TD ch={<span style={{color:"#888",fontFamily:"sans-serif"}}>{h.unit}</span>}/>
+                    <TD ch={<b>{fmt(h.actualQty)}</b>} align="right"/>
+                    <TD ch={<b style={{color:"#1E5631"}}>{usd(h.actualCost)}</b>} align="right"/>
+                    <TD ch={<span style={{fontFamily:"sans-serif",fontSize:11}}>{h.note}</span>}/>
+                  </tr>
+                ))}</tbody>
+              </TW>
+            </>
+          )}
+
+          {waste.length>0&&(
+            <>
+              <Banner title={"SECTION 3 — WASTE SUMMARY  |  Total: "+usd(totalWasteCost)} color="#7D3C98" count={waste.length}/>
+              <TW>
+                <thead><tr><TH ch="Item"/><TH ch="Unit"/><TH ch="Waste Qty" align="right"/><TH ch="Waste Cost" align="right"/><TH ch="Note"/></tr></thead>
+                <tbody>{[...waste].sort((a,b)=>(b.wasteCost||0)-(a.wasteCost||0)).map((w,i)=>(
+                  <tr key={i} style={{background:i%2===0?"#F5EEF8":"#FFFFFF"}}>
+                    <TD ch={<b>{w.item}</b>}/><TD ch={<span style={{color:"#888",fontFamily:"sans-serif"}}>{w.unit}</span>}/>
+                    <TD ch={fmt(w.wasteQty)} align="right"/>
+                    <TD ch={<b style={{color:"#7D3C98"}}>{usd(w.wasteCost)}</b>} align="right"/>
+                    <TD ch={<span style={{fontFamily:"sans-serif",fontSize:11}}>{w.note}</span>}/>
+                  </tr>
+                ))}</tbody>
+              </TW>
+            </>
+          )}
+
+          {zero.length>0&&(
+            <>
+              <Banner title="SECTION 4 — ZERO MOVEMENT  |  Stock On Hand, Nothing Used This Week" color="#1A5276" count={zero.length}/>
+              <TW>
+                <thead><tr><TH ch="Item"/><TH ch="Unit"/><TH ch="On Hand" align="right"/><TH ch="Observation"/></tr></thead>
+                <tbody>{zero.map((z,i)=>(
+                  <tr key={i} style={{background:i%2===0?"#EBF5FB":"#FFFFFF"}}>
+                    <TD ch={<b>{z.item}</b>}/><TD ch={<span style={{color:"#888",fontFamily:"sans-serif"}}>{z.unit}</span>}/>
+                    <TD ch={<b>{fmt(z.onHand)}</b>} align="right"/>
+                    <TD ch={<span style={{fontFamily:"sans-serif",fontSize:11}}>{z.note}</span>}/>
+                  </tr>
+                ))}</tbody>
+              </TW>
+            </>
+          )}
+
+          <div style={{textAlign:"center",color:"#bbb",fontSize:11,paddingTop:14,borderTop:"1px solid #CCCCCC",paddingBottom:28,fontFamily:"sans-serif"}}>
+            Saxbys Inventory Analysis · {report.location} · {parsed.opening||fileName} · {parsed.closing} · {new Date().toLocaleString()}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AnalysisApp(){
+  const xlsxReady=useXLSX();
+  const[screen,setScreen]=useState("upload");
+  const[progress,setProgress]=useState("");
+  const[report,setReport]=useState(null);
+  const[fileName,setFileName]=useState("");
+  const[error,setError]=useState("");
+
+  const run=useCallback(async({file,location,openDate,closeDate,apiKey})=>{
+    setScreen("processing");setFileName(file.name);setError("");
+    try{
+      setProgress("Reading file…");
+      const data=await parseXtraCHEF(file);
+      setProgress("Running AI analysis…");
+      const result=await callClaude(data,location,apiKey);
+      result._openDate=openDate;result._closeDate=closeDate;setReport(result);setScreen("results");
+    }catch(err){setError(err.message||"Something went wrong.");setScreen("error");}
+  },[]);
+
+  if(screen==="processing") return <ProcessingScreen step={progress}/>;
+  if(screen==="results"&&report) return <ResultsScreen report={report} fileName={fileName} onReset={()=>{setScreen("upload");setReport(null);setError("");}} />;
+  if(screen==="error") return(
+    <div style={{minHeight:"100vh",background:"#F5F5F5",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"sans-serif"}}>
+      <div style={{background:"#FFFFFF",borderRadius:16,padding:36,maxWidth:440,textAlign:"center",boxShadow:"0 4px 24px rgba(0,0,0,.1)"}}>
+        <div style={{fontSize:36,marginBottom:14}}>⚠️</div>
+        <div style={{fontWeight:700,color:"#C0392B",fontSize:17,marginBottom:8}}>Analysis Failed</div>
+        <div style={{color:"#444444",marginBottom:22,lineHeight:1.6}}>{error}</div>
+        <button onClick={()=>{setScreen("upload");setError("");}} style={{padding:"11px 26px",borderRadius:10,border:"none",background:"#1E5631",color:"#FFFFFF",fontWeight:700,cursor:"pointer",fontSize:14}}>← Try Again</button>
+      </div>
+    </div>
+  );
+  return <UploadScreen xlsxReady={xlsxReady} onAnalyze={run}/>;
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(AnalysisApp));
+</script>
+</body>
+</html>
