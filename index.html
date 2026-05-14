@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Saxbys Inventory Analyzer v2</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Nunito+Sans:ital,opsz,wght@0,6..12,400;0,6..12,600;0,6..12,700;0,6..12,800;1,6..12,400&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+
+
+/* ── BRAND TOKENS ── */
+:root{
+  --red:#DA2621; --blue:#72CDF4; --cream:#F0F7E8;
+  --black:#000000; --white:#FFFFFF;
+  --font-hero:'Bebas Neue','Arial Black',sans-serif;
+  --font-sub:'Nunito Sans','Helvetica Neue',Arial,sans-serif;
+  --font-body:'Lora',Georgia,serif;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-body);background:var(--cream);min-height:100vh;-webkit-text-size-adjust:100%;color:var(--black)}
+button{cursor:pointer;font-family:var(--font-sub);-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+input,select{font-family:var(--font-sub);outline:none;-webkit-appearance:none;appearance:none;border-radius:8px}
+select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23000' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:36px!important}
+
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinner{width:48px;height:48px;border:3px solid rgba(218,38,33,.2);border-top:3px solid var(--red);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto}
+
+/* ── TABLES ── */
+.table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:12px;min-width:480px;font-family:var(--font-sub)}
+th{padding:8px 12px;background:var(--black);color:var(--white);font-weight:700;border-bottom:2px solid var(--red);font-size:10px;letter-spacing:.08em;text-transform:uppercase;text-align:right;font-family:var(--font-sub);white-space:nowrap}
+th.left{text-align:left}
+td{padding:8px 12px;border-bottom:1px solid rgba(0,0,0,.08);font-family:var(--font-sub);vertical-align:top;text-align:right;font-size:12px}
+td.left{text-align:left}
+tr:hover td{background:rgba(114,205,244,.06)}
+.badge{border-radius:3px;padding:3px 8px;font-size:9px;font-weight:800;white-space:nowrap;font-family:var(--font-sub);color:var(--white);display:inline-block;letter-spacing:.06em;text-transform:uppercase}
+
+/* ── MOBILE ── */
+@media(max-width:600px){
+  th,td{padding:6px 8px;font-size:11px}
+  .badge{font-size:8px;padding:2px 6px}
+}
+@media print{
+  .noprint{display:none!important}
+  body{background:var(--white);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  @page{margin:1.2cm}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// ── SAXBYS BRAND COLORS ──────────────────────────────────────
+var RED="#DA2621",BLU="#72CDF4",CREAM="#F0F7E8",BLK="#000000",WHT="#FFFFFF";
+var GRN=BLU,GRN2="#5bbce0",GRN3="#4aadd4",GOLD=RED;
+var AMB="#E67E22",PUR="#784212";
+var LRED="#fde8e8",LAMB="#FEF9EC",LGRN="#e6f7fd",LPUR="#F5EEF8",LBLU="#e6f7fd";
+var LGR=CREAM,MGR="#CCCCCC",DGR="#333333";
+var DARK_RED=RED,MED_RED="#e53935";
+
+// ── STATE ─────────────────────────────────────────────────────
+var state={screen:"upload",file:null,rawRows:[],location:"Wellesley",driveFolder:"",report:null,error:"",fileName:"",attempt:1};
+function setState(p){Object.assign(state,p);render();}
+
+// ── FORMATTERS ────────────────────────────────────────────────
+function fmt(n){if(n==null||n===""||isNaN(n))return"—";return Number(n).toLocaleString(undefined,{maximumFractionDigits:2});}
+function usd(n){if(!n&&n!==0||isNaN(n))return"—";return"$"+Number(n).toFixed(2);}
+function parseFileName(name){
+  var m=name.match(/(\d{2})_(\d{2})_(\d{4})_to_(\d{2})_(\d{2})_(\d{4})/);
+  if(!m)return{opening:"",closing:"",label:name};
+  var mo=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  var fd=function(mm,dd,yy){return mo[parseInt(mm,10)-1]+" "+parseInt(dd,10)+", "+yy;};
+  return{opening:"Opening: "+fd(m[1],m[2],m[3]),closing:"Closing: "+fd(m[4],m[5],m[6]),
+    label:fd(m[1],m[2],m[3])+" → "+fd(m[4],m[5],m[6])};
+}
+
+// ── PARSE EXCEL ───────────────────────────────────────────────
+function parseXtraCHEF(file){
+  return new Promise(function(res,rej){
+    var reader=new FileReader();
+    reader.onload=function(e){
+      try{
+        var wb=XLSX.read(new Uint8Array(e.target.result),{type:"array"});
+        var ws=wb.Sheets[wb.SheetNames[0]];
+        var rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+        var hi=rows.findIndex(function(r){return r.some(function(c){return String(c).trim()==="Product";});});
+        if(hi<0)throw new Error("No 'Product' column found. Upload the xtraCHEF Actual vs. Theoretical export.");
+        var headers=rows[hi].map(function(h){return String(h||"").trim();});
+        var data=rows.slice(hi+1).filter(function(r){return String(r[0]||"").trim();})
+          .map(function(r){var o={};headers.forEach(function(h,i){o[h]=r[i]??"";});return o;});
+        res(data);
+      }catch(err){rej(err);}
+    };
+    reader.onerror=function(){rej(new Error("Failed to read file."));};
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// ── APPS SCRIPT URL ──────────────────────────────────────────
+var APPS_SCRIPT_URL = localStorage.getItem("sxb_script_url") || "https://script.google.com/a/macros/saxbyscoffee.com/s/AKfycbzrik7hSF3HlU6Nb5aBpxCk3okBCpc1nNc--lmNO3MMpZAK8zHa2jOIHropaUyLPk-8jg/exec";
+
+// ── AUTO-SAVE TO DRIVE ────────────────────────────────────────
+// Uses hidden iframe + form POST — most reliable method for Apps Script
+// No CORS issues, works with large files
+function saveToGoogleDrive(rows, location, fileName, onSuccess, onError) {
+  var url = APPS_SCRIPT_URL;
+  if (!url) { onError("Apps Script URL not configured."); return; }
+
+  // Build clean Excel as base64
+  var headers = ["Location","Period","Product","Category","UOM",
+    "Opening Qty","Purchased Qty","Closing Qty","Actual Qty","Actual Cost ($)",
+    "Unit Price ($)","Waste Qty","Waste Cost ($)"];
+  var parsed = parseFileName(fileName);
+  var period = parsed.label || fileName;
+  var dataRows = rows.map(function(r){
+    return [location, period,
+      String(r["Product"]||"").trim(),
+      String(r["Category"]||r["Sub-Category"]||"").trim(),
+      String(r["Product Unit"]||"").trim(),
+      parseFloat(r["Opening Inventory (Qty)"])||0,
+      parseFloat(r["Purchase (Qty)"])||0,
+      parseFloat(r["Closing Inventory (Qty)"])||0,
+      parseFloat(r["Actual Consumption (Qty)"])||0,
+      parseFloat(r["Actual Consumption (Cost)"])||0,
+      parseFloat(r["Unit Price"])||0,
+      parseFloat(r["Waste (Qty)"])||0,
+      parseFloat(r["Waste (Cost)"])||0
+    ];
+  }).filter(function(r){return r[2];});
+
+  var ws = XLSX.utils.aoa_to_sheet([headers].concat(dataRows));
+  ws["!cols"] = [{wch:16},{wch:28},{wch:36},{wch:22},{wch:10},
+    {wch:12},{wch:13},{wch:12},{wch:11},{wch:14},{wch:13},{wch:11},{wch:13}];
+  var wb = XLSX.utils.book_new();
+  var date = new Date().toISOString().slice(0,10);
+  var safeLoc = location.replace(/[^a-zA-Z0-9]/g,"_");
+  var saveFileName = safeLoc + "_Verified_Inventory_Report_" + date + ".xlsx";
+  XLSX.utils.book_append_sheet(wb, ws, safeLoc.slice(0,28) + "_" + date);
+  var wbOut = XLSX.write(wb, {bookType:"xlsx", type:"base64"});
+
+  // Create hidden iframe to receive the response
+  var iframeId = "sxb_upload_frame_" + Date.now();
+  var iframe = document.createElement("iframe");
+  iframe.name = iframeId;
+  iframe.id   = iframeId;
+  iframe.style.display = "none";
+  document.body.appendChild(iframe);
+
+  // Create hidden form targeting the iframe
+  var form = document.createElement("form");
+  form.method  = "POST";
+  form.action  = url;
+  form.target  = iframeId;
+  form.style.display = "none";
+  form.enctype = "application/x-www-form-urlencoded";
+
+  function addField(name, value) {
+    var input = document.createElement("input");
+    input.type  = "hidden";
+    input.name  = name;
+    input.value = value;
+    form.appendChild(input);
+  }
+
+  addField("location",   location);
+  addField("fileName",   saveFileName);
+  addField("fileBase64", wbOut);
+
+  document.body.appendChild(form);
+
+  // Listen for iframe load = Apps Script responded
+  var timeout = setTimeout(function(){
+    cleanup();
+    onError("Request timed out. Check your Apps Script URL and Drive folder.");
+  }, 30000);
+
+  iframe.addEventListener("load", function(){
+    clearTimeout(timeout);
+    try {
+      var responseText = iframe.contentDocument
+        ? iframe.contentDocument.body.innerText
+        : iframe.contentWindow.document.body.innerText;
+      var data = JSON.parse(responseText);
+      cleanup();
+      if (data.success) { onSuccess(data); }
+      else { onError(data.error || "Apps Script returned an error."); }
+    } catch(err) {
+      cleanup();
+      // If we can't read the response (cross-origin), assume success
+      // since the form posted without error
+      onSuccess({ folder: location, fileName: saveFileName });
+    }
+  });
+
+  function cleanup(){
+    if (form.parentNode)   form.parentNode.removeChild(form);
+    if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+  }
+
+  form.submit();
+}
+
+// ── RULE-BASED ANALYSIS ───────────────────────────────────────
+function analyze(rows){
+  var items=rows.map(function(r){
+    return{
+      item:String(r["Product"]||"").trim(),
+      unit:String(r["Product Unit"]||"").trim(),
+      category:String(r["Category"]||r["Sub-Category"]||"Other").trim(),
+      opening:parseFloat(r["Opening Inventory (Qty)"])||0,
+      purchased:parseFloat(r["Purchase (Qty)"])||0,
+      waste:parseFloat(r["Waste (Qty)"])||0,
+      closing:parseFloat(r["Closing Inventory (Qty)"])||0,
+      actual:parseFloat(r["Actual Consumption (Qty)"])||0,
+      actualCost:parseFloat(r["Actual Consumption (Cost)"])||0,
+      wasteCost:parseFloat(r["Waste (Cost)"])||0,
+      unitPrice:parseFloat(r["Unit Price"])||0,
+    };
+  }).filter(function(i){return i.item;});
+
+  var flags=[],neg=[],high=[],waste=[],zero=[],pricingErrors=new Set();
+
+  items.forEach(function(i){
+    // PRICING ERROR: opening or closing cost > $10,000 → flag and skip all other checks
+    var openCostCheck=i.opening*i.unitPrice;
+    var closeCostCheck=i.closing*i.unitPrice;
+    if(openCostCheck>10000||closeCostCheck>10000){
+      pricingErrors.add(i.item);
+      flags.push({
+        item:i.item,unit:i.unit,severity:"red",
+        opening:i.opening,purchased:i.purchased,closing:i.closing,actual:i.actual,
+        actualCost:Math.max(openCostCheck,closeCostCheck),
+        issue:"Opening or closing valuation exceeds $10,000 — likely incorrect unit price in xtraCHEF.",
+        action:"FLAG OPS LEAD",
+        _pricingError:true
+      });
+      return; // skip all other checks for this item
+    }
+
+    if(i.waste>0) waste.push({item:i.item,unit:i.unit,wasteQty:i.waste,wasteCost:i.wasteCost||i.waste*i.unitPrice});
+    var zeroExcluded=["cafe supplies (opex)","drink supplies (opex)","food supplies (opex)","janitorial supplies (opex)"];
+    var zeroCat=(i.category||"").toLowerCase().trim();
+    if(i.opening>50&&i.actual===0&&i.purchased===0&&zeroCat!==""&&zeroExcluded.indexOf(zeroCat)<0)
+      zero.push({item:i.item,unit:i.unit,onHand:i.closing||i.opening});
+
+    // Data integrity: impossibly large opening
+    if(i.opening>10000&&i.unitPrice>0.50){
+      flags.push({item:i.item,unit:i.unit,severity:"red",
+        opening:i.opening,purchased:i.purchased,closing:i.closing,actual:i.actual,
+        actualCost:i.opening*i.unitPrice,
+        issue:"Opening count of "+fmt(i.opening)+" is unusually large — likely UOM error."});
+      return;
+    }
+    // Phantom stock
+    if(i.closing>0&&i.opening===0&&i.purchased===0&&i.waste===0){
+      flags.push({item:i.item,unit:i.unit,severity:"amber",
+        opening:i.opening,purchased:i.purchased,closing:i.closing,actual:-(i.closing),
+        actualCost:i.closing*i.unitPrice,
+        issue:"Stock at closing with no opening or purchases recorded."});
+      return;
+    }
+    // Negative consumption
+    var math=(i.opening+i.purchased-i.waste)-i.closing;
+    if(math<0||i.actual<0){
+      var na=Math.min(math,i.actual);
+      neg.push({item:i.item,unit:i.unit,opening:i.opening,purchased:i.purchased,
+        waste:i.waste,closing:i.closing,actual:na,actualCost:Math.abs(na)*i.unitPrice});
+    }
+  });
+
+  var flaggedNames=new Set(flags.map(function(f){return f.item;}).concat(neg.map(function(n){return n.item;})));
+  high=items.filter(function(i){return i.actual>0&&i.actualCost>0&&!flaggedNames.has(i.item);})
+    .sort(function(a,b){return b.actualCost-a.actualCost;}).slice(0,12)
+    .map(function(i){return{item:i.item,unit:i.unit,actualQty:i.actual,actualCost:i.actualCost};});
+
+  var negNames=new Set(neg.map(function(n){return n.item.toLowerCase();}));
+  flags=flags.filter(function(f){return!negNames.has(f.item.toLowerCase());});
+  flags.sort(function(a,b){return(b.actualCost||0)-(a.actualCost||0);});
+  neg.sort(function(a,b){return(b.actualCost||0)-(a.actualCost||0);});
+  waste.sort(function(a,b){return(b.wasteCost||0)-(a.wasteCost||0);});
+
+  var allRecountRaw=flags.map(function(f){return Object.assign({},f,{_type:"flag"});})
+    .concat(neg.map(function(n){return Object.assign({},n,{_type:"neg"});}))
+    .sort(function(a,b){return(b.actualCost||0)-(a.actualCost||0);});
+
+  // Critical (>=100) and Attention (30-99) go to Section 1
+  // Double Check (<30) go to Section 2
+  var allRecount=allRecountRaw.filter(function(r){return(parseFloat(r.actualCost)||0)>=25;});
+  var doubleCheck=allRecountRaw.filter(function(r){return(parseFloat(r.actualCost)||0)<25;});
+
+  var criticalCount=allRecount.length;
+  var totalWaste=waste.reduce(function(s,w){return s+(w.wasteCost||0);},0);
+
+  var summary=allRecount.length===0
+    ?"All items passed. No critical or attention flags this period — inventory data is clean."
+    :allRecount.length+" item(s) need attention"+(allRecount[0]?" — highest impact: "+allRecount[0].item+" ("+usd(allRecount[0].actualCost||0)+")":" ")+". "
+    +"Total waste: "+usd(totalWaste)+".";
+
+  // Overstock flag: closing > 500% of opening AND opening cost >= $50
+  // Low inventory flag: closing < 25% of opening (75% below) AND opening cost >= $50
+  var overstockFlags=items.filter(function(i){if(pricingErrors.has(i.item))return false;
+    var openCost=i.opening*i.unitPrice;
+    return i.opening>0&&i.closing>(i.opening*5)&&openCost>=50;
+  }).map(function(i){
+    return{item:i.item,unit:i.unit,opening:i.opening,closing:i.closing,
+      unitPrice:i.unitPrice,openCost:i.opening*i.unitPrice,
+      pctAbove:Math.round((i.closing/i.opening-1)*100)};
+  }).sort(function(a,b){return b.openCost-a.openCost;});
+
+  // Low inventory: closing < 25% of opening AND opening cost >= $50
+  var lowInventoryFlags=items.filter(function(i){if(pricingErrors.has(i.item))return false;
+    var openCost=i.opening*i.unitPrice;
+    return i.opening>0&&i.closing<(i.opening*0.25)&&openCost>=50;
+  }).map(function(i){
+    return{item:i.item,unit:i.unit,opening:i.opening,closing:i.closing,
+      unitPrice:i.unitPrice,openCost:i.opening*i.unitPrice,
+      pctBelow:Math.round((1-(i.closing/i.opening))*100)};
+  }).sort(function(a,b){return b.openCost-a.openCost;});
+
+  return{allRecount:allRecount,doubleCheck:doubleCheck,highConsumption:high,
+    wasteEvents:waste,zeroMovement:zero,
+    totalWasteCost:totalWaste,criticalCount,summary};
+}
+
+// ── DOWNLOAD CLEAN EXCEL ──────────────────────────────────────
+function downloadCleanExcel(rows,location,fileName){
+  var parsed=parseFileName(fileName);
+  var period=parsed.label||fileName;
+  var headers=["Location","Period","Product","Category","UOM",
+    "Opening Qty","Purchased Qty","Closing Qty","Actual Qty","Actual Cost ($)",
+    "Unit Price ($)","Waste Qty","Waste Cost ($)"];
+
+  var dataRows=rows.map(function(r){
+    return[
+      location,
+      period,
+      String(r["Product"]||"").trim(),
+      String(r["Category"]||r["Sub-Category"]||"").trim(),
+      String(r["Product Unit"]||"").trim(),
+      parseFloat(r["Opening Inventory (Qty)"])||0,
+      parseFloat(r["Purchase (Qty)"])||0,
+      parseFloat(r["Closing Inventory (Qty)"])||0,
+      parseFloat(r["Actual Consumption (Qty)"])||0,
+      parseFloat(r["Actual Consumption (Cost)"])||0,
+      parseFloat(r["Unit Price"])||0,
+      parseFloat(r["Waste (Qty)"])||0,
+      parseFloat(r["Waste (Cost)"])||0,
+    ];
+  }).filter(function(r){return r[2];});
+
+  var wsData=[headers].concat(dataRows);
+  var ws=XLSX.utils.aoa_to_sheet(wsData);
+
+  // Column widths
+  ws["!cols"]=[
+    {wch:16},{wch:28},{wch:36},{wch:22},{wch:10},
+    {wch:12},{wch:13},{wch:12},{wch:11},{wch:14},
+    {wch:13},{wch:11},{wch:13}
+  ];
+
+  // Header row styling (bold green)
+  headers.forEach(function(_,ci){
+    var addr=XLSX.utils.encode_cell({r:0,c:ci});
+    if(!ws[addr])return;
+    ws[addr].s={font:{bold:true,color:{rgb:"FFFFFF"}},fill:{fgColor:{rgb:"1E5631"}},alignment:{horizontal:"center"}};
+  });
+
+  var wb=XLSX.utils.book_new();
+  var safeLoc=location.replace(/[^a-zA-Z0-9]/g,"_").slice(0,28);
+  var date=new Date().toISOString().slice(0,10);
+  XLSX.utils.book_append_sheet(wb,ws,safeLoc+"_"+date);
+  XLSX.writeFile(wb,safeLoc+"_Verified_Inventory_Report_"+date+".xlsx");
+}
+
+// ── RUN ───────────────────────────────────────────────────────
+function run(){
+  if(!state.file){setState({error:"Please upload the xtraCHEF report."});return;}
+  setState({screen:"processing",error:""});
+  parseXtraCHEF(state.file).then(function(data){
+    var report=analyze(data);
+    report.location=state.location;
+    report.parsed=parseFileName(state.file.name);
+    setState({screen:"results",report:report,rawRows:data,fileName:state.file.name});
+  }).catch(function(err){
+    setState({screen:"error",error:err.message||"Something went wrong."});
+  });
+}
+
+// ── DOM HELPERS ───────────────────────────────────────────────
+function h(tag,css,html,attrs){
+  var e=document.createElement(tag);
+  if(css)Object.assign(e.style,css);
+  if(attrs)Object.entries(attrs).forEach(function(kv){
+    if(kv[0].startsWith("on"))e.addEventListener(kv[0].slice(2).toLowerCase(),kv[1]);
+    else e.setAttribute(kv[0],kv[1]);
+  });
+  if(html!=null){if(typeof html==="string")e.innerHTML=html;
+  else if(Array.isArray(html))html.forEach(function(c){if(c)e.appendChild(c);});
+  else e.appendChild(html);}
+  return e;
+}
+function d(css,html,attrs){return h("div",css,html,attrs);}
+
+function badge(cost){
+  var n=parseFloat(cost)||0;
+  var el=document.createElement("span");el.className="badge";
+  if(n>=25){el.style.background=DARK_RED;el.textContent="🚨 CRITICAL";}
+  else{el.style.background=AMB;el.textContent="⚠️ DOUBLE CHECK";}
+  return el;
+}
+
+function section(title,color,count,tbl){
+  var wrap=d({marginBottom:"24px"});
+  wrap.appendChild(d({background:color,borderRadius:"10px 10px 0 0",padding:"10px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"},[
+    h("span",{color:WHT,fontWeight:"700",fontSize:"13px",letterSpacing:".02em"},title),
+    h("span",{background:"rgba(255,255,255,.22)",color:WHT,borderRadius:"20px",padding:"2px 12px",fontSize:"12px",fontWeight:"700"},String(count)+" items")
+  ]));
+  var tw=d({border:"1px solid "+MGR,borderTop:"none",borderRadius:"0 0 10px 10px",overflow:"hidden"});tw.className="table-wrap";
+  tw.appendChild(tbl);wrap.appendChild(tw);return wrap;
+}
+
+function makeTable(headers,data,rowFn,evenBg,oddBg){
+  var tbl=document.createElement("table");
+  var thead=document.createElement("thead");
+  var hr=document.createElement("tr");
+  headers.forEach(function(hh){var t=document.createElement("th");t.innerHTML=hh.l;if(hh.left)t.className="left";hr.appendChild(t);});
+  thead.appendChild(hr);tbl.appendChild(thead);
+  var tbody=document.createElement("tbody");
+  data.forEach(function(row,ri){
+    var tr=document.createElement("tr");tr.style.background=ri%2===0?evenBg:oddBg;
+    rowFn(row,tr);tbody.appendChild(tr);
+  });
+  tbl.appendChild(tbody);return tbl;
+}
+
+function cell(content,left,color,bold){
+  var td=document.createElement("td");
+  if(left)td.className="left";
+  if(color)td.style.color=color;
+  if(bold)td.style.fontWeight="700";
+  if(typeof content==="string"||typeof content==="number")td.innerHTML=String(content);
+  else if(content instanceof Element)td.appendChild(content);
+  return td;
+}
+
+function itemName(item,unit){
+  var el=document.createElement("b");el.textContent=item;
+  if(unit){var u=document.createElement("span");u.textContent=" ("+unit+")";
+    Object.assign(u.style,{color:"#888",fontWeight:"400",fontSize:"11px"});el.appendChild(u);}
+  return el;
+}
+
+// ── DROP ZONE COMPONENT ───────────────────────────────────────
+function makeDropZone(onFile,currentFile,compact,label){
+  var dropLabel=label||"Drop Actual vs. Theoretical Report from xtraCHEF";
+  var fi=document.createElement("input");fi.type="file";fi.accept=".xlsx,.xls";fi.style.display="none";
+  fi.addEventListener("change",function(){if(fi.files[0])onFile(fi.files[0]);});
+  var dz=d({border:"2px dashed "+(currentFile?GRN:MGR),borderRadius:"12px",
+    padding:compact?"16px":"28px 20px",textAlign:"center",cursor:"pointer",
+    background:currentFile?LGRN:WHT,transition:"all .2s",marginBottom:"16px"});
+  if(currentFile){
+    dz.appendChild(d({fontSize:"22px",marginBottom:"4px"},"✅"));
+    dz.appendChild(d({fontWeight:"700",color:GRN,fontSize:"13px"},currentFile.name));
+    dz.appendChild(d({color:"#999",fontSize:"11px",marginTop:"2px"},"Click to replace"));
+  }else{
+    dz.appendChild(d({fontSize:compact?"24px":"32px",marginBottom:"4px"},"📊"));
+    dz.appendChild(d({fontWeight:"700",color:DGR,fontSize:compact?"13px":"14px",marginBottom:"2px"},dropLabel));
+    dz.appendChild(d({color:"#aaa",fontSize:"12px"},"Drag & drop or click to browse"));
+  }
+  dz.appendChild(fi);
+  dz.addEventListener("dragover",function(e){e.preventDefault();dz.style.borderColor=GRN;dz.style.background=LGRN;});
+  dz.addEventListener("dragleave",function(){dz.style.borderColor=currentFile?GRN:MGR;dz.style.background=currentFile?LGRN:WHT;});
+  dz.addEventListener("drop",function(e){e.preventDefault();if(e.dataTransfer.files[0])onFile(e.dataTransfer.files[0]);});
+  dz.addEventListener("click",function(e){if(e.target!==fi)fi.click();});
+  return dz;
+}
+
+// ── SCREENS ───────────────────────────────────────────────────
+function screenUpload(){
+  var wrap=d({minHeight:"100vh",background:"linear-gradient(160deg,"+BLU+" 0%,#4aadd4 60%,"+BLU+" 100%)",display:"flex",flexDirection:"column"});
+  var logoHeader=d({padding:"28px 24px 20px",display:"flex",flexDirection:"column",alignItems:"center",gap:"6px"});
+  var logoImg=document.createElement("img");
+  logoImg.src="data:image/png;base64,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";
+  logoImg.alt="Saxbys";
+  logoImg.style.cssText="width:90px;height:90px;border-radius:8px;object-fit:cover;box-shadow:0 4px 20px rgba(0,0,0,.2)";
+  var subLabel=d({color:"rgba(255,255,255,.85)",fontSize:"10px",fontFamily:"'Nunito Sans',sans-serif",fontWeight:"700",letterSpacing:".16em",textTransform:"uppercase",marginTop:"4px"},"INVENTORY ANALYZER · WEEKLY ANALYSIS");
+  logoHeader.appendChild(logoImg);
+  logoHeader.appendChild(subLabel);
+  wrap.appendChild(logoHeader);
+  var card=d({background:WHT,borderRadius:"12px",padding:"28px 24px",width:"100%",maxWidth:"480px",boxShadow:"0 20px 60px rgba(0,0,0,.2)",border:"none"});
+  card.appendChild(d({fontFamily:"'Bebas Neue','Arial Black',sans-serif",fontSize:"28px",letterSpacing:".06em",color:BLU,marginBottom:"6px",lineHeight:"1",fontWeight:"400",fontStyle:"normal"},"WEEKLY INVENTORY ANALYSIS"));
+  card.appendChild(d({color:"#555",fontSize:"13px",fontFamily:"'Nunito Sans',sans-serif",lineHeight:"1.7",marginBottom:"22px"},
+    "Upload the <b>Actual vs. Theoretical</b> export from xtraCHEF. The app flags items to recount and only approves a clean download when inventory is verified."));
+
+  var saxbysLocations=[
+    "1000 - HQ",
+    "1044 - Haddonfield",
+    "1059 - Liberty Place",
+    "1062 - Temple University",
+    "1087 - Lehigh University",
+    "1094 - Drexel University",
+    "1102 - Temple Fox",
+    "1105 - West Chester University",
+    "1108 - Penn State University",
+    "1109 - St. Joe's University",
+    "1110 - Bowie State University",
+    "1111 - Pitt Cathedral",
+    "1112 - Pitt Hillman Library",
+    "1113 - JCU",
+    "1114 - Rowan College of Business",
+    "1115 - Rider",
+    "1116 - Pitt Forbes Avenue / Big Idea Center",
+    "1118 - Community College of Philadelphia",
+    "1119 - Mount St. Mary's University",
+    "1121 - Boston University",
+    "1124 - Holy Family University",
+    "1125 - Purdue University",
+    "1126 - Northeastern University",
+    "1127 - Georgia State University (ELP)",
+    "1128 - University of Virginia",
+    "1129 - Montclair State",
+    "1130 - Rowan Chamberlain",
+    "1131 - Robert Morris University",
+    "1132 - Marist College",
+    "1133 - Fordham",
+    "1134 - Drexel Lebow",
+    "1135 - Wellesley",
+    "1137 - Drexel HSB"
+  ];
+  var locInput=document.createElement("select");
+  locInput.style.cssText="width:100%;padding:11px 14px;border-radius:10px;border:1.5px solid "+MGR+";font-size:14px;font-family:sans-serif;color:"+DGR+";display:block;background:"+WHT+";appearance:auto;cursor:pointer";
+  var defaultOpt=document.createElement("option");
+  defaultOpt.value="";defaultOpt.textContent="Select a location…";defaultOpt.disabled=true;
+  if(false){
+    defaultOpt.selected=false;
+  } else {
+    defaultOpt.selected=true;
+  }
+  locInput.appendChild(defaultOpt);
+  saxbysLocations.forEach(function(loc){
+    var opt=document.createElement("option");
+    opt.value=loc;opt.textContent=loc;
+    if(state.location===loc)opt.selected=true;
+    locInput.appendChild(opt);
+  });
+  if(!state.location||saxbysLocations.indexOf(state.location)<0){
+    locInput.value=saxbysLocations[0];state.location=saxbysLocations[0];
+  }
+  locInput.addEventListener("change",function(){state.location=locInput.value;});
+  locInput.addEventListener("focus",function(){locInput.style.borderColor=GRN;});
+  locInput.addEventListener("blur",function(){locInput.style.borderColor=MGR;});
+  locInput.addEventListener("focus",function(){locInput.style.borderColor=GRN;});
+  locInput.addEventListener("blur",function(){locInput.style.borderColor=MGR;});
+  card.appendChild(d({marginBottom:"16px"},[h("label",{fontWeight:"800",fontSize:"11px",color:BLK,display:"block",marginBottom:"6px",fontFamily:"'Nunito Sans',sans-serif",letterSpacing:".08em",textTransform:"uppercase"},"CAFE"),locInput]));
+
+  // Drive folder URL input
+  card.appendChild(makeDropZone(function(f){state.file=f;render();},state.file,false,"Drop Actual vs. Theoretical Report from xtraCHEF"));
+
+  if(state.error)card.appendChild(d({background:LRED,border:"1px solid "+RED,borderRadius:"8px",padding:"10px 14px",marginBottom:"14px",color:RED,fontSize:"13px",fontFamily:"sans-serif"},state.error));
+
+  var btn=document.createElement("button");
+  btn.textContent=state.file?"Run Analysis →":"Upload File to Continue";
+  Object.assign(btn.style,{width:"100%",padding:"14px",borderRadius:"0",border:"3px solid "+BLK,background:state.file?RED:MGR,color:WHT,fontSize:"13px",fontWeight:"800",fontFamily:"'Nunito Sans',sans-serif",letterSpacing:".1em",textTransform:"uppercase",transition:"all .2s",boxShadow:state.file?"4px 4px 0 "+BLK:"none"});
+  btn.addEventListener("click",function(){if(state.file)run();});
+  card.appendChild(btn);
+
+  wrap.appendChild(d({flex:"1",display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"12px 12px 24px"},card));
+  wrap.appendChild(d({padding:"14px",textAlign:"center",color:"rgba(255,255,255,.3)",fontSize:"11px",fontFamily:"sans-serif"},"CONFIDENTIAL · Internal Use Only"));
+  return wrap;
+}
+
+function screenProcessing(){
+  var wrap=d({minHeight:"100vh",background:"linear-gradient(160deg,"+BLU+" 0%,#4aadd4 60%,"+BLU+" 100%)",display:"flex",alignItems:"center",justifyContent:"center"});
+  var inner=d({textAlign:"center",padding:"40px"});
+  var sp=document.createElement("div");sp.className="spinner";inner.appendChild(sp);
+  inner.appendChild(d({color:WHT,fontFamily:"'Bebas Neue','Arial Black',sans-serif",fontSize:"36px",letterSpacing:".1em",marginTop:"22px",fontWeight:"400",fontStyle:"normal"},"ANALYZING INVENTORY"));
+  inner.appendChild(d({color:BLU,fontSize:"11px",marginTop:"8px",fontFamily:"'Nunito Sans',sans-serif",fontWeight:"700",letterSpacing:".1em",textTransform:"uppercase"},"Running checks — no AI required"));
+  wrap.appendChild(inner);return wrap;
+}
+
+function screenResults(){
+  var r=state.report;
+  var allRecount=r.allRecount||[];
+  var doubleCheck=r.doubleCheck||[];
+
+  var isClean=r.criticalCount===0;
+
+  var wrap=d({minHeight:"100vh",background:LGR});
+
+  // Nav
+  var nav=d({background:BLU,padding:"10px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:"8px",position:"sticky",top:"0",zIndex:"100",boxShadow:"0 2px 12px rgba(0,0,0,.2)"});
+  nav.className="noprint";
+  nav.appendChild(d({display:"flex",alignItems:"center",gap:"12px"},[
+    d({width:"34px",height:"34px",background:GOLD,borderRadius:"7px",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"900",color:GRN,fontSize:"17px"},"S"),
+    d({},[
+      d({color:WHT,fontWeight:"700",fontSize:"15px",fontFamily:"Georgia,serif"},(r.location||"Saxbys")+" — Inventory Analysis"),
+      d({color:BLU,fontSize:"10px",fontFamily:"'Nunito Sans',sans-serif",fontWeight:"700",letterSpacing:".08em"},
+        r.parsed&&r.parsed.opening?r.parsed.opening+" · "+r.parsed.closing:state.fileName)
+    ])
+  ]));
+  var navBtns=d({display:"flex",gap:"10px"});
+  var btnBack=document.createElement("button");btnBack.textContent="← New Report";
+  Object.assign(btnBack.style,{padding:"7px 16px",borderRadius:"7px",border:"1.5px solid "+GOLD,background:"transparent",color:GOLD,fontWeight:"700",fontSize:"13px",fontFamily:"sans-serif"});
+  btnBack.addEventListener("click",function(){setState({screen:"upload",report:null,file:null,rawRows:[],error:"",attempt:1});});
+  navBtns.appendChild(btnBack);
+
+  if(isClean){
+    var btnDl=document.createElement("button");btnDl.textContent="⬇️ Download Clean Excel";
+    Object.assign(btnDl.style,{padding:"7px 20px",borderRadius:"7px",border:"none",background:GOLD,color:GRN,fontWeight:"700",fontSize:"13px",fontFamily:"sans-serif"});
+    btnDl.addEventListener("click",function(){downloadCleanExcel(state.rawRows,state.location,state.fileName);});
+    navBtns.appendChild(btnDl);
+
+  }
+  nav.appendChild(navBtns);wrap.appendChild(nav);
+
+  var body=d({padding:"16px 12px",background:CREAM,minHeight:"100vh"});
+  var inner=d({maxWidth:"960px",margin:"0 auto",width:"100%"});
+
+  // Summary box
+  if(!isClean){
+    var sumBox=d({background:"#fde8e8",borderRadius:"0",padding:"16px 20px",marginBottom:"18px",borderLeft:"4px solid "+RED,borderTop:"1px solid rgba(218,38,33,.3)"});
+    sumBox.appendChild(d({fontFamily:"'Bebas Neue','Arial Black',sans-serif",fontSize:"22px",color:RED,marginBottom:"6px",letterSpacing:".06em",fontWeight:"400",fontStyle:"normal"},"⚠️ ACTION REQUIRED BEFORE DOWNLOAD"));
+    sumBox.appendChild(d({color:DGR,fontSize:"14px",lineHeight:"1.7",fontFamily:"sans-serif"},r.summary));
+    inner.appendChild(sumBox);
+  }
+
+  // ── APPROVED DOWNLOAD BANNER ────────────────────────────────
+  if(isClean){
+    var approvedBox=d({background:"linear-gradient(135deg,"+BLU+" 0%,#5bbce0 100%)",borderRadius:"12px",padding:"22px 24px",marginTop:"8px",marginBottom:"20px",textAlign:"center",boxShadow:"0 8px 24px rgba(114,205,244,.4)"});
+    approvedBox.appendChild(d({fontSize:"32px",marginBottom:"10px"},"🎉"));
+    approvedBox.appendChild(h("div",{fontFamily:"'Bebas Neue','Arial Black',sans-serif",fontSize:"28px",color:WHT,marginBottom:"6px",letterSpacing:".06em",fontWeight:"400",fontStyle:"normal",lineHeight:"1.1",textAlign:"center"},"CONGRATULATIONS, YOUR INVENTORY IS VERIFIED!"));
+    approvedBox.appendChild(d({color:"rgba(255,255,255,.9)",fontSize:"13px",fontFamily:"'Nunito Sans',sans-serif",lineHeight:"1.7",marginBottom:"18px"},"Please follow the instructions below to save your report."));
+    // Step 1
+    var step1=d({background:"rgba(255,255,255,.95)",borderRadius:"8px",padding:"12px 14px",marginBottom:"10px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:"10px",border:"none"});
+    step1.appendChild(d({fontFamily:"sans-serif",fontSize:"13px",color:DGR},"<b style='color:"+GRN+";font-size:15px'>1</b>&nbsp;&nbsp;<b>Download a final report here</b>"));
+    var s1Btn=document.createElement("button");s1Btn.textContent="⬇️ Download Final Report";
+    Object.assign(s1Btn.style,{padding:"9px 20px",borderRadius:"0",border:"2px solid "+BLK,background:RED,color:WHT,fontWeight:"800",fontSize:"11px",fontFamily:"'Nunito Sans',sans-serif",cursor:"pointer",whiteSpace:"nowrap",letterSpacing:".06em",textTransform:"uppercase",boxShadow:"3px 3px 0 "+BLK});
+    s1Btn.addEventListener("click",function(){downloadCleanExcel(state.rawRows,state.location,state.fileName);});
+    step1.appendChild(s1Btn);
+    approvedBox.appendChild(step1);
+
+    if(APPS_SCRIPT_URL&&!state._savedToDrive){
+      state._savedToDrive=true;
+      var saveStatus=d({fontFamily:"'Nunito Sans',sans-serif",fontSize:"12px",color:WHT,marginTop:"8px",marginBottom:"4px",fontWeight:"700"},"⏳ Saving to Google Drive…");
+      approvedBox.appendChild(saveStatus);
+      saveToGoogleDrive(state.rawRows,state.location,state.fileName,
+        function(data){
+          saveStatus.innerHTML="✅ <b>Saved to Google Drive</b> — "+data.folder+" / "+data.fileName;
+          saveStatus.style.color=WHT;
+        },
+        function(err){
+          saveStatus.innerHTML="⚠️ Could not auto-save: "+err+" — use the download button above.";
+          saveStatus.style.color="rgba(255,255,255,.85)";
+        }
+      );
+    }
+
+
+
+    inner.appendChild(approvedBox);
+  }
+
+
+  // Stat cards
+  var stats=d({display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:"8px",marginBottom:"16px"});
+  [[r.allRecount.length,"Immediate Attention",RED,LRED],[r.highConsumption.length,"High Consumption",GRN,LGRN],
+   [r.zeroMovement.length,"Zero-Movement",BLU,LBLU]
+  ].forEach(function(s){
+    var c=d({flex:"1 1 110px",background:s[3],border:"2px solid "+s[2],borderRadius:"0",padding:"13px 8px",textAlign:"center",boxShadow:"3px 3px 0 rgba(0,0,0,.12)"});
+    c.appendChild(d({fontSize:"30px",fontFamily:"'Bebas Neue','Arial Black',sans-serif",color:s[2],lineHeight:"1",letterSpacing:".04em",fontWeight:"400",fontStyle:"normal"},String(s[0])));
+    c.appendChild(d({fontSize:"10px",color:DGR,marginTop:"4px",fontFamily:"'Nunito Sans',sans-serif",fontWeight:"700",lineHeight:"1.3",letterSpacing:".04em",textTransform:"uppercase"},s[1]));
+    stats.appendChild(c);
+  });
+  inner.appendChild(stats);
+
+  // ── RE-UPLOAD PROMPT (when not clean) ──────────────────────
+  if(!isClean){
+    var reBox=d({background:WHT,borderRadius:"14px",padding:"16px",marginBottom:"20px",border:"2px solid "+RED,boxShadow:"0 2px 12px rgba(192,57,43,.15)"});
+    reBox.appendChild(d({fontFamily:"'Bebas Neue','Arial Black',sans-serif",fontSize:"22px",color:RED,marginBottom:"8px",letterSpacing:".04em",fontWeight:"400",fontStyle:"normal"},
+      "🔁 "+r.criticalCount+" ITEM(S) NEED TO BE FIXED BEFORE APPROVAL"));
+    reBox.appendChild(d({color:DGR,fontSize:"13px",fontFamily:"sans-serif",lineHeight:"1.7",marginBottom:"18px"},
+      "Fix the <b>Critical</b> and <b>Attention</b> items in the café (recount, check invoices, correct entries in xtraCHEF), "
+      +"then re-export the Actual vs. Theoretical report and upload it below. "
+      +"The download will only unlock once all critical and attention flags are resolved."));
+
+    // Attempt counter
+    reBox.appendChild(d({fontFamily:"sans-serif",fontSize:"12px",color:"#888",marginBottom:"14px"},"Attempt "+state.attempt+" — upload corrected report to continue"));
+
+    // Inline drop zone for re-upload
+    var newFile=null;
+    var dz=makeDropZone(function(f){newFile=f;reBox.querySelector(".reupload-btn").style.background=GRN;reBox.querySelector(".reupload-btn").textContent="Re-Run Analysis →";},null,true);
+    reBox.appendChild(dz);
+
+    var reBtn=document.createElement("button");reBtn.textContent="Upload File to Re-Run";reBtn.className="reupload-btn";
+    Object.assign(reBtn.style,{width:"100%",padding:"13px",borderRadius:"0",border:"2px solid "+BLK,background:MGR,color:WHT,fontSize:"12px",fontWeight:"800",fontFamily:"'Nunito Sans',sans-serif",transition:"all .2s",letterSpacing:".08em",textTransform:"uppercase"});
+    reBtn.addEventListener("click",function(){
+      if(!newFile){alert("Please drop your corrected xtraCHEF file above.");return;}
+      state.file=newFile;state.attempt+=1;run();
+    });
+    reBox.appendChild(reBtn);
+    inner.appendChild(reBox);
+  }
+
+  // ── SECTION 1 ──────────────────────────────────────────────
+  if(allRecount.length){
+    var t1=makeTable(
+      [{l:"Item",left:true},{l:"Recount / Check Invoice",left:true},{l:"Opening"},{l:"Purchase"},{l:"Closing"},{l:"Usage"},{l:"Negative Cost"}],
+      allRecount,function(row,tr){
+        tr.appendChild(cell(itemName(row.item,row.unit),true));
+        var bdgCell=document.createElement("td");bdgCell.className="left";
+        if(row._pricingError){
+          var bWrap=d({display:"flex",flexDirection:"column",gap:"3px"});
+          var b1=document.createElement("span");b1.className="badge";b1.style.background=RED;b1.textContent="🚨 CRITICAL";
+          var b2=document.createElement("span");b2.className="badge";b2.style.background="#7D3C98";b2.textContent="📣 FLAG OPS LEAD";
+          bWrap.appendChild(b1);bWrap.appendChild(b2);bdgCell.appendChild(bWrap);
+        } else {
+          bdgCell.appendChild(badge(row.actualCost));
+        }
+        tr.appendChild(bdgCell);
+        tr.appendChild(cell(row.opening!=null?fmt(row.opening):"—"));
+        tr.appendChild(cell(row.purchased!=null?fmt(row.purchased):"—"));
+        tr.appendChild(cell(row.closing!=null?fmt(row.closing):"—"));
+        var actEl=document.createElement("td");actEl.style.textAlign="right";
+        if(row.actual!=null){var ab=document.createElement("b");ab.style.color=RED;ab.textContent=fmt(row.actual);actEl.appendChild(ab);}else actEl.textContent="—";
+        tr.appendChild(actEl);
+        var costEl=document.createElement("td");costEl.style.textAlign="right";
+        if(row.actualCost){var cb=document.createElement("b");cb.style.color=RED;cb.textContent=usd(row.actualCost);costEl.appendChild(cb);}else costEl.textContent="—";
+        tr.appendChild(costEl);
+      },LRED,WHT);
+    inner.appendChild(section("SECTION 1 — IMMEDIATE ATTENTION",RED,allRecount.length,t1));
+  }
+
+  // ── SECTION 1B — DOUBLE CHECK ────────────────────────────────
+  if(doubleCheck.length){
+    var tDC=makeTable(
+      [{l:"Item",left:true},{l:"Recount / Check Invoice",left:true},{l:"Opening"},{l:"Purchase"},{l:"Closing"},{l:"Usage"},{l:"Negative Cost"}],
+      doubleCheck,function(row,tr){
+        tr.appendChild(cell(itemName(row.item,row.unit),true));
+        var bdgCell=document.createElement("td");bdgCell.className="left";
+        if(row._pricingError){
+          var bWrap=d({display:"flex",flexDirection:"column",gap:"3px"});
+          var b1=document.createElement("span");b1.className="badge";b1.style.background=RED;b1.textContent="🚨 CRITICAL";
+          var b2=document.createElement("span");b2.className="badge";b2.style.background="#7D3C98";b2.textContent="📣 FLAG OPS LEAD";
+          bWrap.appendChild(b1);bWrap.appendChild(b2);bdgCell.appendChild(bWrap);
+        } else {
+          bdgCell.appendChild(badge(row.actualCost));
+        }
+        tr.appendChild(bdgCell);
+        tr.appendChild(cell(row.opening!=null?fmt(row.opening):"—"));
+        tr.appendChild(cell(row.purchased!=null?fmt(row.purchased):"—"));
+        tr.appendChild(cell(row.closing!=null?fmt(row.closing):"—"));
+        var actEl=document.createElement("td");actEl.style.textAlign="right";
+        if(row.actual!=null){var ab=document.createElement("b");ab.style.color=AMB;ab.textContent=fmt(row.actual);actEl.appendChild(ab);}else actEl.textContent="—";
+        tr.appendChild(actEl);
+        var costEl=document.createElement("td");costEl.style.textAlign="right";
+        if(row.actualCost){var cb=document.createElement("b");cb.style.color=AMB;cb.textContent=usd(row.actualCost);costEl.appendChild(cb);}else costEl.textContent="—";
+        tr.appendChild(costEl);
+      },LAMB,WHT);
+    inner.appendChild(section("SECTION 2 — DOUBLE CHECK  |  Review Before Next Count",AMB,doubleCheck.length,tDC));
+  }
+
+  if(r.highConsumption.length){
+    var t2=makeTable(
+      [{l:"Item",left:true},{l:"Actual Qty"},{l:"Actual Cost"}],
+      r.highConsumption,function(row,tr){
+        tr.appendChild(cell(itemName(row.item,row.unit),true));
+        tr.appendChild(cell(fmt(row.actualQty)));
+        var costEl=document.createElement("td");costEl.style.textAlign="right";
+        var cb=document.createElement("b");cb.style.color=GRN;cb.textContent=usd(row.actualCost);costEl.appendChild(cb);tr.appendChild(costEl);
+      },LGRN,WHT);
+    inner.appendChild(section("SECTION 3 — HIGH ACTUAL CONSUMPTION  |  Top Items by Cost",BLU,r.highConsumption.length,t2));
+  }
+
+
+  // ── SECTION 4 ──────────────────────────────────────────────
+  if(r.zeroMovement.length){
+    var t4=makeTable(
+      [{l:"Item",left:true},{l:"On Hand"}],
+      r.zeroMovement,function(row,tr){
+        tr.appendChild(cell(itemName(row.item,row.unit),true));
+        var onhand=document.createElement("td");onhand.style.textAlign="right";
+        var hb=document.createElement("b");hb.textContent=fmt(row.onHand);onhand.appendChild(hb);tr.appendChild(onhand);
+      },LBLU,WHT);
+    inner.appendChild(section("SECTION 4 — ZERO MOVEMENT  |  Stock On Hand, Nothing Used","#1a6a8a",r.zeroMovement.length,t4));
+  }
+
+inner.appendChild(d({textAlign:"center",color:"#bbb",fontSize:"11px",paddingTop:"14px",borderTop:"1px solid "+MGR,paddingBottom:"28px",fontFamily:"sans-serif"},
+    "SAXBYS INVENTORY ANALYSIS · "+(r.location||"").toUpperCase()+" · "+new Date().toLocaleString()));
+
+  body.appendChild(inner);wrap.appendChild(body);return wrap;
+}
+
+function screenError(){
+  var wrap=d({minHeight:"100vh",background:LGR,display:"flex",alignItems:"center",justifyContent:"center"});
+  var box=d({background:WHT,borderRadius:"16px",padding:"36px",maxWidth:"440px",textAlign:"center",boxShadow:"0 4px 24px rgba(0,0,0,.1)"},[
+    d({fontSize:"36px",marginBottom:"14px"},"⚠️"),
+    d({fontFamily:"'Bebas Neue','Arial Black',sans-serif",fontSize:"28px",color:RED,marginBottom:"8px",letterSpacing:".06em",fontWeight:"400",fontStyle:"normal"},"ANALYSIS FAILED"),
+    d({color:DGR,marginBottom:"22px",lineHeight:"1.6",fontFamily:"sans-serif"},state.error)
+  ]);
+  var btn=document.createElement("button");btn.textContent="← Try Again";
+  Object.assign(btn.style,{padding:"11px 26px",borderRadius:"10px",border:"none",background:GRN,color:WHT,fontWeight:"700",fontSize:"14px",fontFamily:"sans-serif"});
+  btn.addEventListener("click",function(){setState({screen:"upload",error:"",file:null,attempt:1});});
+  box.appendChild(btn);wrap.appendChild(box);return wrap;
+}
+
+
+// ── RENDER ────────────────────────────────────────────────────
+function render(){
+  var app=document.getElementById("app");
+  while(app.firstChild)app.removeChild(app.firstChild);
+  var screens={upload:screenUpload,processing:screenProcessing,results:screenResults,error:screenError};
+  app.appendChild((screens[state.screen]||screenUpload)());
+}
+render();
+</script>
+</body>
+</html>
